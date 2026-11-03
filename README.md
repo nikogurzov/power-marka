@@ -7,9 +7,13 @@ The power settings GNOME hides — in one small window.
 - **Laptop lid**: suspend / lock only / do nothing / power off / hibernate —
   separately on battery, plugged in and with an external monitor
 
+![Power Plus window](docs/screenshot.png)
+
 Bulgarian and English interface. GTK4 + libadwaita, fits right into GNOME.
 
 ## Install (Debian 13 / Ubuntu 24.04+)
+
+Download the `.deb` from [Releases](https://github.com/nikogurzov/power-plus/releases/latest), then:
 
     sudo apt install ./power-plus_1.0.0_all.deb
 
