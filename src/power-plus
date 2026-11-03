@@ -1,0 +1,164 @@
+#!/usr/bin/python3
+# Power Plus / Захранване+ — the power settings GNOME hides.
+# Screen blank delay, idle suspend (AC/battery) and laptop lid action.
+# License: GPL-3.0-or-later. https://tech.palamarka.com
+import locale, os, re, subprocess, sys
+import gi
+gi.require_version('Gtk', '4.0'); gi.require_version('Adw', '1')
+from gi.repository import Adw, Gio, GLib, Gtk
+
+APP_ID = 'com.palamarka.PowerPlus'
+VERSION = '1.0.0'
+HELPER = '/usr/libexec/power-plus/lid-helper'
+
+BG = (locale.getlocale()[0] or os.environ.get('LANG', '')).startswith('bg')
+T = {
+ 'title': ('Захранване+', 'Power Plus'),
+ 'screen': ('Екран', 'Screen'),
+ 'blank': ('Изгасяне на екрана', 'Screen blank'),
+ 'blank_sub': ('Минути без движение. 0 = никога', 'Minutes of inactivity. 0 = never'),
+ 'dim': ('Затъмняване преди изгасяне', 'Dim screen before blanking'),
+ 'sleep': ('Автоматично заспиване', 'Automatic suspend'),
+ 'sleep_desc': ('Когато компютърът стои без работа', 'When the computer is idle'),
+ 'on_ac': ('На ток', 'Plugged in'),
+ 'on_bat': ('На батерия', 'On battery'),
+ 'after': ('След (минути)', 'After (minutes)'),
+ 'lid': ('Затваряне на капака', 'Closing the lid'),
+ 'lid_desc': ('Системна настройка — ще поиска парола', 'System setting — asks for your password'),
+ 'lid_bat': ('На батерия', 'On battery'),
+ 'lid_ac': ('На ток', 'Plugged in'),
+ 'lid_dock': ('С външен монитор', 'With external monitor'),
+ 'apply': ('Приложи', 'Apply'),
+ 'reset': ('По подразбиране', 'Defaults'),
+ 'saved': ('Настройките за капака са записани', 'Lid settings saved'),
+ 'failed': ('Неуспешно — настройката не е сменена', 'Failed — nothing was changed'),
+ 'suspend': ('Заспиване', 'Suspend'),
+ 'lock': ('Само заключване', 'Lock only'),
+ 'ignore': ('Нищо', 'Do nothing'),
+ 'poweroff': ('Изключване', 'Power off'),
+ 'hibernate': ('Хибернация', 'Hibernate'),
+}
+def _(k): return T[k][0 if BG else 1]
+
+LID_KEYS = ('HandleLidSwitch', 'HandleLidSwitchExternalPower', 'HandleLidSwitchDocked')
+LID_DEFAULT = {'HandleLidSwitch': 'suspend', 'HandleLidSwitchExternalPower': None, 'HandleLidSwitchDocked': 'ignore'}
+
+def can_hibernate():
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SYSTEM)
+        r = bus.call_sync('org.freedesktop.login1', '/org/freedesktop/login1', 'org.freedesktop.login1.Manager',
+                          'CanHibernate', None, GLib.VariantType('(s)'), 0, 2000, None)
+        return r.unpack()[0] == 'yes'
+    except GLib.Error:
+        return False
+
+def read_lid():
+    vals = dict(LID_DEFAULT)
+    try:
+        txt = subprocess.run(['systemd-analyze', 'cat-config', 'systemd/logind.conf'],
+                             capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        txt = ''
+    for line in txt.splitlines():
+        m = re.match(r'\s*(HandleLidSwitch\w*)\s*=\s*(\S+)', line)
+        if m and m.group(1) in vals: vals[m.group(1)] = m.group(2)
+    if vals['HandleLidSwitchExternalPower'] is None: vals['HandleLidSwitchExternalPower'] = vals['HandleLidSwitch']
+    return vals
+
+def has_lid():
+    return os.path.isdir('/proc/acpi/button/lid') and bool(os.listdir('/proc/acpi/button/lid'))
+
+
+class Win(Adw.ApplicationWindow):
+    def __init__(self, app):
+        super().__init__(application=app, title=_('title'), default_width=520, default_height=720)
+        self.sess = Gio.Settings.new('org.gnome.desktop.session')
+        self.pw = Gio.Settings.new('org.gnome.settings-daemon.plugins.power')
+        self.toasts = Adw.ToastOverlay()
+        tv = Adw.ToolbarView(); tv.add_top_bar(Adw.HeaderBar())
+        page = Adw.PreferencesPage(); tv.set_content(page)
+        self.toasts.set_child(tv); self.set_content(self.toasts)
+
+        # Screen
+        g = Adw.PreferencesGroup(title=_('screen')); page.add(g)
+        self.blank = Adw.SpinRow.new_with_range(0, 1440, 5)
+        self.blank.set_title(_('blank')); self.blank.set_subtitle(_('blank_sub'))
+        self.blank.set_value(self.sess.get_uint('idle-delay') // 60)
+        self.blank.connect('notify::value', lambda r, *_a: self.sess.set_uint('idle-delay', int(r.get_value()) * 60))
+        self.sess.connect('changed::idle-delay', lambda s, k: self._sync(self.blank, s.get_uint(k) // 60))
+        g.add(self.blank)
+        dim = Adw.SwitchRow(title=_('dim')); g.add(dim)
+        self.pw.bind('idle-dim', dim, 'active', Gio.SettingsBindFlags.DEFAULT)
+
+        # Idle suspend
+        g = Adw.PreferencesGroup(title=_('sleep'), description=_('sleep_desc')); page.add(g)
+        for kind, label in (('ac', 'on_ac'), ('battery', 'on_bat')):
+            if kind == 'battery' and not self._has_battery(): continue
+            exp = Adw.ExpanderRow(title=_(label), show_enable_switch=True)
+            tkey, mkey = f'sleep-inactive-{kind}-type', f'sleep-inactive-{kind}-timeout'
+            exp.set_enable_expansion(self.pw.get_string(tkey) != 'nothing')
+            exp.connect('notify::enable-expansion', lambda e, _p, k=tkey:
+                        self.pw.set_string(k, 'suspend' if e.get_enable_expansion() else 'nothing'))
+            sp = Adw.SpinRow.new_with_range(1, 1440, 5); sp.set_title(_('after'))
+            sp.set_value(max(1, self.pw.get_int(mkey) // 60))
+            sp.connect('notify::value', lambda r, *_a, k=mkey: self.pw.set_int(k, int(r.get_value()) * 60))
+            exp.add_row(sp); g.add(exp)
+
+        # Lid
+        if has_lid():
+            self.actions = ['suspend', 'lock', 'ignore', 'poweroff'] + (['hibernate'] if can_hibernate() else [])
+            g = Adw.PreferencesGroup(title=_('lid'), description=_('lid_desc')); page.add(g)
+            model = Gtk.StringList.new([_(a) for a in self.actions])
+            self.lid_rows = {}
+            for key, label in zip(LID_KEYS, ('lid_bat', 'lid_ac', 'lid_dock')):
+                row = Adw.ComboRow(title=_(label), model=model)
+                row.connect('notify::selected', lambda *_a: self.apply_btn.set_sensitive(True))
+                self.lid_rows[key] = row; g.add(row)
+            box = Gtk.Box(spacing=8, halign=Gtk.Align.END, margin_top=12)
+            reset = Gtk.Button(label=_('reset')); reset.connect('clicked', self.on_reset)
+            self.apply_btn = Gtk.Button(label=_('apply'), css_classes=['suggested-action'])
+            self.apply_btn.connect('clicked', self.on_apply)
+            box.append(reset); box.append(self.apply_btn); g.add(box)
+            self.load_lid()
+
+    def _has_battery(self):
+        base = '/sys/class/power_supply'
+        try:
+            return any(open(f'{base}/{d}/type').read().strip() == 'Battery' for d in os.listdir(base))
+        except OSError:
+            return False
+
+    def _sync(self, row, v):
+        if int(row.get_value()) != v: row.set_value(v)
+
+    def load_lid(self):
+        vals = read_lid()
+        for key, row in self.lid_rows.items():
+            v = vals.get(key, 'suspend')
+            if v not in self.actions: v = 'suspend'
+            row.set_selected(self.actions.index(v))
+        self.apply_btn.set_sensitive(False)
+
+    def _run_helper(self, args):
+        try:
+            ok = subprocess.run(['pkexec', HELPER] + args, timeout=120).returncode == 0
+        except Exception:
+            ok = False
+        self.toasts.add_toast(Adw.Toast(title=_('saved') if ok else _('failed')))
+        self.load_lid()
+
+    def on_apply(self, _b):
+        self._run_helper(['set'] + [self.actions[self.lid_rows[k].get_selected()] for k in LID_KEYS])
+
+    def on_reset(self, _b):
+        self._run_helper(['reset'])
+
+
+class App(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
+    def do_activate(self):
+        (self.props.active_window or Win(self)).present()
+
+if __name__ == '__main__':
+    sys.exit(App().run(sys.argv))

@@ -1,0 +1,18 @@
+#!/bin/sh
+# Power Plus lid helper — runs as root via pkexec.
+# Usage: lid-helper set <battery> <ac> <docked> | lid-helper reset
+set -eu
+CONF=/etc/systemd/logind.conf.d/50-power-plus.conf
+ok() { case "$1" in suspend|lock|ignore|poweroff|hibernate) return 0;; *) return 1;; esac; }
+case "${1:-}" in
+  set)
+    [ $# -eq 4 ] || exit 2
+    ok "$2" && ok "$3" && ok "$4" || exit 2
+    mkdir -p /etc/systemd/logind.conf.d
+    printf '# Written by Power Plus (power-plus). Remove this file to restore defaults.\n[Login]\nHandleLidSwitch=%s\nHandleLidSwitchExternalPower=%s\nHandleLidSwitchDocked=%s\n' "$2" "$3" "$4" > "$CONF.tmp"
+    chmod 644 "$CONF.tmp"; mv "$CONF.tmp" "$CONF" ;;
+  reset) rm -f "$CONF" ;;
+  *) exit 2 ;;
+esac
+# reload logind config without ending sessions
+systemctl kill -s HUP systemd-logind

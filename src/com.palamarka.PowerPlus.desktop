@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Power Plus
+Name[bg]=Захранване+
+Comment=Screen blank, automatic suspend and lid close settings
+Comment[bg]=Изгасяне на екрана, заспиване и затваряне на капака
+Keywords=power;screen;blank;lid;suspend;sleep;battery;
+Keywords[bg]=захранване;екран;изгасяне;капак;заспиване;батерия;
+Exec=power-plus
+Icon=com.palamarka.PowerPlus
+Terminal=false
+Categories=GTK;GNOME;Settings;HardwareSettings;
+StartupNotify=true
