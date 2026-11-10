@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-# Power Plus / Захранване+ — the power settings GNOME hides.
+# power-marka / Захранване+ — the power settings GNOME hides.
 # Screen blank delay, idle suspend (AC/battery) and laptop lid action.
 # License: GPL-3.0-or-later. https://tech.palamarka.com
 import locale, os, re, subprocess, sys
@@ -7,13 +7,13 @@ import gi
 gi.require_version('Gtk', '4.0'); gi.require_version('Adw', '1')
 from gi.repository import Adw, Gio, GLib, Gtk
 
-APP_ID = 'com.palamarka.PowerPlus'
-VERSION = '1.0.0'
-HELPER = '/usr/libexec/power-plus/lid-helper'
+APP_ID = 'com.palamarka.PowerMarka'
+VERSION = '1.0.1'
+HELPER = '/usr/libexec/power-marka/lid-helper'
 
 BG = (locale.getlocale()[0] or os.environ.get('LANG', '')).startswith('bg')
 T = {
- 'title': ('Захранване+', 'Power Plus'),
+ 'title': ('Захранване+ (power-marka)', 'power-marka'),
  'screen': ('Екран', 'Screen'),
  'blank': ('Изгасяне на екрана', 'Screen blank'),
  'blank_sub': ('Минути без движение. 0 = никога', 'Minutes of inactivity. 0 = never'),
